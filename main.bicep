@@ -41,12 +41,34 @@ param cpuCore string = '0.25'
 ])
 param memorySize string = '0.5'
 
+@description('Choose whether to use a built-in PostgreSQL server or connect to an existing one')
+@allowed([
+  'builtin'
+  'existing'
+])
+param databaseOption string = 'builtin'
+
+@description('Name of the existing PostgreSQL flexible server (required if databaseOption is "existing")')
+param existingPostgresServerName string = ''
+
+@description('Resource group of the existing PostgreSQL flexible server (leave empty to use current resource group)')
+param existingPostgresResourceGroup string = ''
+
+@description('Name of the database to create or use on the PostgreSQL server')
+param databaseName string = 'vaultwardendb'
+
+@description('PostgreSQL administrator username')
+param postgresAdminUsername string = 'vwadmin'
+
 @secure()
+@description('PostgreSQL administrator password')
 param dbPassword string
 
 var logWorkspaceName  = 'vw-logwks${uniqueString(resourceGroup().id)}'
 var storageAccountName  = 'vwstorage${uniqueString(resourceGroup().id)}'
 var location = resourceGroup().location
+var useExistingPostgres = databaseOption == 'existing'
+var postgresResourceGroupName = empty(existingPostgresResourceGroup) ? resourceGroup().name : existingPostgresResourceGroup
 
 resource storageaccount 'Microsoft.Storage/storageAccounts@2021-02-01' = {
   name: storageAccountName
@@ -111,39 +133,46 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2022-06-01-preview'=
   }
 }
 
-resource vwDBi 'Microsoft.DBforPostgreSQL/flexibleServers@2022-12-01'={
-  location:location
-  name:'vwdbi-${uniqueString(resourceGroup().id)}'
-  sku:{
+// Built-in PostgreSQL server (only deployed when databaseOption is 'builtin')
+resource vwDBi 'Microsoft.DBforPostgreSQL/flexibleServers@2022-12-01' = if (!useExistingPostgres) {
+  location: location
+  name: 'vwdbi-${uniqueString(resourceGroup().id)}'
+  sku: {
     name: 'Standard_B1ms'
     tier: 'Burstable'
   }
-  properties:{
-    administratorLogin:'vwadmin'
-    administratorLoginPassword:dbPassword
-    storage:{
-      storageSizeGB:32
+  properties: {
+    administratorLogin: postgresAdminUsername
+    administratorLoginPassword: dbPassword
+    storage: {
+      storageSizeGB: 32
     }
     version: '14'
-    authConfig:{
-      passwordAuth:'Enabled'
-      activeDirectoryAuth:'Disabled'
+    authConfig: {
+      passwordAuth: 'Enabled'
+      activeDirectoryAuth: 'Disabled'
     }
   }
-  resource dbfw 'firewallRules'={
-    name:'dbFW'
-    properties:{
+  resource dbfw 'firewallRules' = {
+    name: 'dbFW'
+    properties: {
       endIpAddress: '0.0.0.0'
       startIpAddress: '0.0.0.0'
     }
   }
-  
 }
 
-resource vwDB 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2022-12-01'={
-  name:'vwdb-${uniqueString(resourceGroup().id)}'
-  parent:vwDBi
-  properties:{
+// Reference to existing PostgreSQL server (only used when databaseOption is 'existing')
+resource existingPostgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2022-12-01' existing = if (useExistingPostgres) {
+  name: existingPostgresServerName
+  scope: resourceGroup(postgresResourceGroupName)
+}
+
+// Database on built-in server
+resource vwDB 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2022-12-01' = if (!useExistingPostgres) {
+  name: databaseName
+  parent: vwDBi
+  properties: {
     charset: 'UTF8'
     collation: 'en_US.utf8'
   }
@@ -189,8 +218,10 @@ resource vwardenApp 'Microsoft.App/containerApps@2022-06-01-preview'= {
               value: AdminAPIKEY
             }
             {
-              name:'DATABASE_URL'
-              value:'postgresql://vwadmin:${dbPassword}@${vwDBi.properties.fullyQualifiedDomainName}/${vwDB.name}'
+              name: 'DATABASE_URL'
+              value: useExistingPostgres 
+                ? 'postgresql://${postgresAdminUsername}:${dbPassword}@${existingPostgresServer.?properties.?fullyQualifiedDomainName ?? existingPostgresServerName}/${databaseName}'
+                : 'postgresql://${postgresAdminUsername}:${dbPassword}@${vwDBi.?properties.?fullyQualifiedDomainName ?? 'localhost'}/${databaseName}'
             }
           ]
         }
@@ -209,3 +240,10 @@ resource vwardenApp 'Microsoft.App/containerApps@2022-06-01-preview'= {
     }
   }
 }
+
+output containerAppFQDN string = vwardenApp.properties.configuration.ingress.fqdn
+output databaseServerName string = useExistingPostgres ? existingPostgresServerName : vwDBi.name
+output databaseName string = databaseName
+output databaseCreationNote string = useExistingPostgres 
+  ? 'IMPORTANT: You need to manually create the database "${databaseName}" on the existing PostgreSQL server "${existingPostgresServerName}" if it doesn\'t exist. You can do this via Azure Portal, Azure CLI, or any PostgreSQL client.'
+  : 'Database "${databaseName}" has been created automatically on the built-in PostgreSQL server.'

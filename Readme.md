@@ -23,8 +23,41 @@ This template provides a way to deploy a **Vaultwarden** in a **Azure Container 
     | 1.75 | 3.5Gi |
     | 2.0 | 4.0Gi |
     ---
+- **Database Options**:
+  - **Database Option**: Choose between `builtin` (creates a new PostgreSQL server) or `existing` (connects to an existing PostgreSQL server)
+  - **For built-in database**: A new Azure Database for PostgreSQL Flexible Server will be created automatically
+  - **For existing database**: Provide the following:
+    - **Existing Postgres Server Name**: Name of your existing PostgreSQL Flexible Server
+    - **Existing Postgres Resource Group**: Resource group containing the server (leave empty to use current resource group)
+    - **Database Name**: Name of the database to create on the server (default: vaultwardendb)
+    - **Postgres Admin Username**: PostgreSQL administrator username (default: vwadmin)
+    - **Important**: When using an existing PostgreSQL server, you must manually create the database specified in "Database Name" on your server if it doesn't already exist. The template will not create the database on external servers.
+  - **Db Password**: PostgreSQL administrator password (required for both options)
 - **Deploy**
-  - provide databaseAdmin passowrd
+
+### Creating Database on Existing PostgreSQL Server
+If you chose to use an existing PostgreSQL server, you need to create the database manually. Here are a few ways to do it:
+
+**Option 1: Using Azure CLI**
+```bash
+az postgres flexible-server db create \
+  --resource-group <your-resource-group> \
+  --server-name <your-server-name> \
+  --database-name vaultwardendb
+```
+
+**Option 2: Using Azure Portal**
+1. Navigate to your PostgreSQL Flexible Server in Azure Portal
+2. Select "Databases" from the left menu
+3. Click "+ Add" to create a new database
+4. Enter the database name (e.g., "vaultwardendb")
+5. Click "Save"
+
+**Option 3: Using a PostgreSQL Client**
+```sql
+CREATE DATABASE vaultwardendb WITH ENCODING 'UTF8' LC_COLLATE='en_US.utf8' LC_CTYPE='en_US.utf8';
+```
+
 
 2. Resource vaultwarden Microsoft.App/containerApps failed - if in some case you will notice failed message, just click **redeploy** and reenter same data as before - it may happen when Azure provision resources and link to storage isn't created at time.
 

@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.15.31.15270",
-      "templateHash": "41053721764921981"
+      "version": "0.40.2.10011",
+      "templateHash": "2156642921885591176"
     }
   },
   "parameters": {
@@ -67,14 +67,58 @@
         "description": "Amount of memory (in gibibytes, GiB) allocated to the container up to 4GiB. Can be with a maximum of two decimals. Ratio with CPU cores must be equal to 2."
       }
     },
+    "databaseOption": {
+      "type": "string",
+      "defaultValue": "builtin",
+      "allowedValues": [
+        "builtin",
+        "existing"
+      ],
+      "metadata": {
+        "description": "Choose whether to use a built-in PostgreSQL server or connect to an existing one"
+      }
+    },
+    "existingPostgresServerName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name of the existing PostgreSQL flexible server (required if databaseOption is \"existing\")"
+      }
+    },
+    "existingPostgresResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group of the existing PostgreSQL flexible server (leave empty to use current resource group)"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "vaultwardendb",
+      "metadata": {
+        "description": "Name of the database to create or use on the PostgreSQL server"
+      }
+    },
+    "postgresAdminUsername": {
+      "type": "string",
+      "defaultValue": "vwadmin",
+      "metadata": {
+        "description": "PostgreSQL administrator username"
+      }
+    },
     "dbPassword": {
-      "type": "securestring"
+      "type": "securestring",
+      "metadata": {
+        "description": "PostgreSQL administrator password"
+      }
     }
   },
   "variables": {
     "logWorkspaceName": "[format('vw-logwks{0}', uniqueString(resourceGroup().id))]",
     "storageAccountName": "[format('vwstorage{0}', uniqueString(resourceGroup().id))]",
-    "location": "[resourceGroup().location]"
+    "location": "[resourceGroup().location]",
+    "useExistingPostgres": "[equals(parameters('databaseOption'), 'existing')]",
+    "postgresResourceGroupName": "[if(empty(parameters('existingPostgresResourceGroup')), resourceGroup().name, parameters('existingPostgresResourceGroup'))]"
   },
   "resources": [
     {
@@ -114,6 +158,7 @@
       ]
     },
     {
+      "condition": "[not(variables('useExistingPostgres'))]",
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
       "apiVersion": "2022-12-01",
       "name": "[format('{0}/{1}', format('vwdbi-{0}', uniqueString(resourceGroup().id)), 'dbFW')]",
@@ -174,6 +219,7 @@
       ]
     },
     {
+      "condition": "[not(variables('useExistingPostgres'))]",
       "type": "Microsoft.DBforPostgreSQL/flexibleServers",
       "apiVersion": "2022-12-01",
       "name": "[format('vwdbi-{0}', uniqueString(resourceGroup().id))]",
@@ -183,7 +229,7 @@
         "tier": "Burstable"
       },
       "properties": {
-        "administratorLogin": "vwadmin",
+        "administratorLogin": "[parameters('postgresAdminUsername')]",
         "administratorLoginPassword": "[parameters('dbPassword')]",
         "storage": {
           "storageSizeGB": 32
@@ -196,9 +242,10 @@
       }
     },
     {
+      "condition": "[not(variables('useExistingPostgres'))]",
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
       "apiVersion": "2022-12-01",
-      "name": "[format('{0}/{1}', format('vwdbi-{0}', uniqueString(resourceGroup().id)), format('vwdb-{0}', uniqueString(resourceGroup().id)))]",
+      "name": "[format('{0}/{1}', format('vwdbi-{0}', uniqueString(resourceGroup().id)), parameters('databaseName'))]",
       "properties": {
         "charset": "UTF8",
         "collation": "en_US.utf8"
@@ -249,7 +296,7 @@
                 },
                 {
                   "name": "DATABASE_URL",
-                  "value": "[format('postgresql://vwadmin:{0}@{1}/{2}', parameters('dbPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('vwdbi-{0}', uniqueString(resourceGroup().id))), '2022-12-01').fullyQualifiedDomainName, format('vwdb-{0}', uniqueString(resourceGroup().id)))]"
+                  "value": "[if(variables('useExistingPostgres'), format('postgresql://{0}:{1}@{2}/{3}', parameters('postgresAdminUsername'), parameters('dbPassword'), coalesce(tryGet(tryGet(if(variables('useExistingPostgres'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('postgresResourceGroupName')), 'Microsoft.DBforPostgreSQL/flexibleServers', parameters('existingPostgresServerName')), '2022-12-01', 'full'), null()), 'properties'), 'fullyQualifiedDomainName'), parameters('existingPostgresServerName')), parameters('databaseName')), format('postgresql://{0}:{1}@{2}/{3}', parameters('postgresAdminUsername'), parameters('dbPassword'), coalesce(tryGet(tryGet(if(not(variables('useExistingPostgres')), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('vwdbi-{0}', uniqueString(resourceGroup().id))), '2022-12-01', 'full'), null()), 'properties'), 'fullyQualifiedDomainName'), 'localhost'), parameters('databaseName')))]"
                 }
               ]
             }
@@ -269,9 +316,26 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.App/managedEnvironments', format('appenv-vaultwarden{0}', uniqueString(resourceGroup().id)))]",
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', format('vwdbi-{0}', uniqueString(resourceGroup().id)), format('vwdb-{0}', uniqueString(resourceGroup().id)))]",
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('vwdbi-{0}', uniqueString(resourceGroup().id)))]"
       ]
     }
-  ]
+  ],
+  "outputs": {
+    "containerAppFQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', 'vaultwarden'), '2022-06-01-preview').configuration.ingress.fqdn]"
+    },
+    "databaseServerName": {
+      "type": "string",
+      "value": "[if(variables('useExistingPostgres'), parameters('existingPostgresServerName'), format('vwdbi-{0}', uniqueString(resourceGroup().id)))]"
+    },
+    "databaseName": {
+      "type": "string",
+      "value": "[parameters('databaseName')]"
+    },
+    "databaseCreationNote": {
+      "type": "string",
+      "value": "[if(variables('useExistingPostgres'), format('IMPORTANT: You need to manually create the database \"{0}\" on the existing PostgreSQL server \"{1}\" if it doesn''t exist. You can do this via Azure Portal, Azure CLI, or any PostgreSQL client.', parameters('databaseName'), parameters('existingPostgresServerName')), format('Database \"{0}\" has been created automatically on the built-in PostgreSQL server.', parameters('databaseName')))]"
+    }
+  }
 }

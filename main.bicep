@@ -220,8 +220,8 @@ resource vwardenApp 'Microsoft.App/containerApps@2022-06-01-preview'= {
             {
               name: 'DATABASE_URL'
               value: useExistingPostgres 
-                ? 'postgresql://${postgresAdminUsername}:${dbPassword}@${existingPostgresServer.?properties.?fullyQualifiedDomainName ?? existingPostgresServerName}/${databaseName}'
-                : 'postgresql://${postgresAdminUsername}:${dbPassword}@${vwDBi.?properties.?fullyQualifiedDomainName ?? 'localhost'}/${databaseName}'
+                ? 'postgresql://${postgresAdminUsername}:${uriComponent(dbPassword)}@${existingPostgresServer.?properties.?fullyQualifiedDomainName ?? existingPostgresServerName}/${databaseName}'
+                : 'postgresql://${postgresAdminUsername}:${uriComponent(dbPassword)}@${vwDBi.?properties.?fullyQualifiedDomainName ?? 'localhost'}/${databaseName}'
             }
           ]
         }
